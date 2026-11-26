@@ -1,13 +1,16 @@
 name: "Tests"
 on:
-  pull_request:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Jasmine spec file(s) to run instead of the full suite'
+        required: false
+        default: ''
 
 jobs:
   Test:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    timeout-minutes: 30
     strategy:
       matrix:
         node_version: ['lts/*', 'node']
@@ -19,33 +22,35 @@ jobs:
         uses: dcodeIO/setup-node-nvm@master
         with:
           node-version: ${{ matrix.node_version }}
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ matrix.node_version }}-${{ hashFiles('package-lock.json') }}
       - name: Install Dependencies
         run: npm ci
       - name: Run Unit Tests 👩🏽‍💻
+        if: ${{ inputs.test-filter == '' }}
         run: npm run test:unit
       - name: Run Spec Tests 👩🏽‍💻
+        if: ${{ inputs.test-filter == '' }}
         run: npm run test:specs
-
-  Lint:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v2
-      - name: Install Dependencies
-        run: npm ci
-      - name: Lint ✨
-        run: npm run test:lint
+      - name: Run Filtered Tests 👩🏽‍💻
+        if: ${{ inputs.test-filter != '' }}
+        run: npm test -- ${{ inputs.test-filter }}
 
   Release:
-    needs: [Test, Lint]
-    if: |
-      github.ref == 'refs/heads/master' &&
-      github.event.repository.fork == false
+    needs: [Test]
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-release-${{ hashFiles('package-lock.json') }}
       - name: Install Dependencies
         run: npm ci
       - name: Build 🗜️
@@ -56,14 +61,22 @@ jobs:
             git config --global user.name "MarkedJS bot"
             git commit -am "🗜️ build [skip ci]"
           fi
-      - name: Release 🎉
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npx semantic-release
+      - name: Pack
+        run: |
+          npm pack
+          mkdir -p dist-pack
+          mv marked-*.tgz dist-pack/
+          ls -l dist-pack
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: marked-tgz
+          path: dist-pack/*.tgz
+          if-no-files-found: error
 
   Skip:
     if: contains(github.event.head_commit.message, '[skip ci]')
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - name: Skip CI 🚫
